@@ -523,6 +523,7 @@ class LightRAG:
                 param,
                 asdict(self),
                 hashing_kv=self.llm_response_cache,
+                algorithm="bm25",
             )
         else:
             raise ValueError(f"Unknown mode {param.mode}")

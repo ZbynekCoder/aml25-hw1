@@ -40,17 +40,17 @@ print(
     rag.query("What is FRP?", param=QueryParam(mode="naive"))
 )
 
-# Perform local search
-print(
-    rag.query("What is FRP?", param=QueryParam(mode="local"))
-)
-
-# Perform global search
-print(
-    rag.query("What is FRP?", param=QueryParam(mode="global"))
-)
-
-# Perform hybrid search
-print(
-    rag.query("What is FRP?", param=QueryParam(mode="hybrid"))
-)
+# # Perform local search
+# print(
+#     rag.query("What is FRP?", param=QueryParam(mode="local"))
+# )
+#
+# # Perform global search
+# print(
+#     rag.query("What is FRP?", param=QueryParam(mode="global"))
+# )
+#
+# # Perform hybrid search
+# print(
+#     rag.query("What is FRP?", param=QueryParam(mode="hybrid"))
+# )

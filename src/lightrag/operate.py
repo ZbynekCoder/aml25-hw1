@@ -1,10 +1,22 @@
 import asyncio
 import json
 import re
-from tqdm.asyncio import tqdm as tqdm_async
-from typing import Union
-from collections import Counter, defaultdict
 import warnings
+from collections import Counter, defaultdict
+from typing import Union
+
+import jieba
+from rank_bm25 import BM25Okapi
+from tqdm.asyncio import tqdm as tqdm_async
+
+from .base import (
+    BaseGraphStorage,
+    BaseKVStorage,
+    BaseVectorStorage,
+    TextChunkSchema,
+    QueryParam,
+)
+from .prompt import GRAPH_FIELD_SEP, PROMPTS
 from .utils import (
     logger,
     clean_str,
@@ -22,26 +34,18 @@ from .utils import (
     save_to_cache,
     CacheData,
 )
-from .base import (
-    BaseGraphStorage,
-    BaseKVStorage,
-    BaseVectorStorage,
-    TextChunkSchema,
-    QueryParam,
-)
-from .prompt import GRAPH_FIELD_SEP, PROMPTS
 
 
 def chunking_by_token_size(
-    content: str, overlap_token_size=128, max_token_size=1024, tiktoken_model="gpt-4o"
+        content: str, overlap_token_size=128, max_token_size=1024, tiktoken_model="gpt-4o"
 ):
     tokens = encode_string_by_tiktoken(content, model_name=tiktoken_model)
     results = []
     for index, start in enumerate(
-        range(0, len(tokens), max_token_size - overlap_token_size)
+            range(0, len(tokens), max_token_size - overlap_token_size)
     ):
         chunk_content = decode_tokens_by_tiktoken(
-            tokens[start : start + max_token_size], model_name=tiktoken_model
+            tokens[start: start + max_token_size], model_name=tiktoken_model
         )
         results.append(
             {
@@ -54,9 +58,9 @@ def chunking_by_token_size(
 
 
 async def _handle_entity_relation_summary(
-    entity_or_relation_name: str,
-    description: str,
-    global_config: dict,
+        entity_or_relation_name: str,
+        description: str,
+        global_config: dict,
 ) -> str:
     use_llm_func: callable = global_config["llm_model_func"]
     llm_max_tokens = global_config["llm_model_max_token_size"]
@@ -85,8 +89,8 @@ async def _handle_entity_relation_summary(
 
 
 async def _handle_single_entity_extraction(
-    record_attributes: list[str],
-    chunk_key: str,
+        record_attributes: list[str],
+        chunk_key: str,
 ):
     if len(record_attributes) < 4 or record_attributes[0] != '"entity"':
         return None
@@ -106,8 +110,8 @@ async def _handle_single_entity_extraction(
 
 
 async def _handle_single_relationship_extraction(
-    record_attributes: list[str],
-    chunk_key: str,
+        record_attributes: list[str],
+        chunk_key: str,
 ):
     if len(record_attributes) < 5 or record_attributes[0] != '"relationship"':
         return None
@@ -132,10 +136,10 @@ async def _handle_single_relationship_extraction(
 
 
 async def _merge_nodes_then_upsert(
-    entity_name: str,
-    nodes_data: list[dict],
-    knowledge_graph_inst: BaseGraphStorage,
-    global_config: dict,
+        entity_name: str,
+        nodes_data: list[dict],
+        knowledge_graph_inst: BaseGraphStorage,
+        global_config: dict,
 ):
     already_entity_types = []
     already_source_ids = []
@@ -179,11 +183,11 @@ async def _merge_nodes_then_upsert(
 
 
 async def _merge_edges_then_upsert(
-    src_id: str,
-    tgt_id: str,
-    edges_data: list[dict],
-    knowledge_graph_inst: BaseGraphStorage,
-    global_config: dict,
+        src_id: str,
+        tgt_id: str,
+        edges_data: list[dict],
+        knowledge_graph_inst: BaseGraphStorage,
+        global_config: dict,
 ):
     already_weights = []
     already_source_ids = []
@@ -246,11 +250,11 @@ async def _merge_edges_then_upsert(
 
 
 async def extract_entities(
-    chunks: dict[str, TextChunkSchema],
-    knowledge_graph_inst: BaseGraphStorage,
-    entity_vdb: BaseVectorStorage,
-    relationships_vdb: BaseVectorStorage,
-    global_config: dict,
+        chunks: dict[str, TextChunkSchema],
+        knowledge_graph_inst: BaseGraphStorage,
+        entity_vdb: BaseVectorStorage,
+        relationships_vdb: BaseVectorStorage,
+        global_config: dict,
 ) -> Union[BaseGraphStorage, None]:
     use_llm_func: callable = global_config["llm_model_func"]
     entity_extract_max_gleaning = global_config["entity_extract_max_gleaning"]
@@ -359,7 +363,7 @@ async def extract_entities(
         already_relations += len(maybe_edges)
         now_ticks = PROMPTS["process_tickers"][
             already_processed % len(PROMPTS["process_tickers"])
-        ]
+            ]
         print(
             f"{now_ticks} Processed {already_processed} chunks, {already_entities} entities(duplicated), {already_relations} relations(duplicated)\r",
             end="",
@@ -369,10 +373,10 @@ async def extract_entities(
 
     results = []
     for result in tqdm_async(
-        asyncio.as_completed([_process_single_content(c) for c in ordered_chunks]),
-        total=len(ordered_chunks),
-        desc="Extracting entities from chunks",
-        unit="chunk",
+            asyncio.as_completed([_process_single_content(c) for c in ordered_chunks]),
+            total=len(ordered_chunks),
+            desc="Extracting entities from chunks",
+            unit="chunk",
     ):
         results.append(await result)
 
@@ -386,32 +390,32 @@ async def extract_entities(
     logger.info("Inserting entities into storage...")
     all_entities_data = []
     for result in tqdm_async(
-        asyncio.as_completed(
-            [
-                _merge_nodes_then_upsert(k, v, knowledge_graph_inst, global_config)
-                for k, v in maybe_nodes.items()
-            ]
-        ),
-        total=len(maybe_nodes),
-        desc="Inserting entities",
-        unit="entity",
+            asyncio.as_completed(
+                [
+                    _merge_nodes_then_upsert(k, v, knowledge_graph_inst, global_config)
+                    for k, v in maybe_nodes.items()
+                ]
+            ),
+            total=len(maybe_nodes),
+            desc="Inserting entities",
+            unit="entity",
     ):
         all_entities_data.append(await result)
 
     logger.info("Inserting relationships into storage...")
     all_relationships_data = []
     for result in tqdm_async(
-        asyncio.as_completed(
-            [
-                _merge_edges_then_upsert(
-                    k[0], k[1], v, knowledge_graph_inst, global_config
-                )
-                for k, v in maybe_edges.items()
-            ]
-        ),
-        total=len(maybe_edges),
-        desc="Inserting relationships",
-        unit="relationship",
+            asyncio.as_completed(
+                [
+                    _merge_edges_then_upsert(
+                        k[0], k[1], v, knowledge_graph_inst, global_config
+                    )
+                    for k, v in maybe_edges.items()
+                ]
+            ),
+            total=len(maybe_edges),
+            desc="Inserting relationships",
+            unit="relationship",
     ):
         all_relationships_data.append(await result)
 
@@ -442,9 +446,9 @@ async def extract_entities(
                 "src_id": dp["src_id"],
                 "tgt_id": dp["tgt_id"],
                 "content": dp["keywords"]
-                + dp["src_id"]
-                + dp["tgt_id"]
-                + dp["description"],
+                           + dp["src_id"]
+                           + dp["tgt_id"]
+                           + dp["description"],
             }
             for dp in all_relationships_data
         }
@@ -454,14 +458,14 @@ async def extract_entities(
 
 
 async def kg_query(
-    query,
-    knowledge_graph_inst: BaseGraphStorage,
-    entities_vdb: BaseVectorStorage,
-    relationships_vdb: BaseVectorStorage,
-    text_chunks_db: BaseKVStorage[TextChunkSchema],
-    query_param: QueryParam,
-    global_config: dict,
-    hashing_kv: BaseKVStorage = None,
+        query,
+        knowledge_graph_inst: BaseGraphStorage,
+        entities_vdb: BaseVectorStorage,
+        relationships_vdb: BaseVectorStorage,
+        text_chunks_db: BaseKVStorage[TextChunkSchema],
+        query_param: QueryParam,
+        global_config: dict,
+        hashing_kv: BaseKVStorage = None,
 ) -> str:
     # Handle cache
     use_model_func = global_config["llm_model_func"]
@@ -581,12 +585,12 @@ async def kg_query(
 
 
 async def _build_query_context(
-    query: list,
-    knowledge_graph_inst: BaseGraphStorage,
-    entities_vdb: BaseVectorStorage,
-    relationships_vdb: BaseVectorStorage,
-    text_chunks_db: BaseKVStorage[TextChunkSchema],
-    query_param: QueryParam,
+        query: list,
+        knowledge_graph_inst: BaseGraphStorage,
+        entities_vdb: BaseVectorStorage,
+        relationships_vdb: BaseVectorStorage,
+        text_chunks_db: BaseKVStorage[TextChunkSchema],
+        query_param: QueryParam,
 ):
     # ll_entities_context, ll_relations_context, ll_text_units_context = "", "", ""
     # hl_entities_context, hl_relations_context, hl_text_units_context = "", "", ""
@@ -639,9 +643,9 @@ async def _build_query_context(
                 query_param,
             )
             if (
-                hl_entities_context == ""
-                and hl_relations_context == ""
-                and hl_text_units_context == ""
+                    hl_entities_context == ""
+                    and hl_relations_context == ""
+                    and hl_text_units_context == ""
             ):
                 logger.warn("No high level context found. Switching to local mode.")
                 query_param.mode = "local"
@@ -680,11 +684,11 @@ async def _build_query_context(
 
 
 async def _get_node_data(
-    query,
-    knowledge_graph_inst: BaseGraphStorage,
-    entities_vdb: BaseVectorStorage,
-    text_chunks_db: BaseKVStorage[TextChunkSchema],
-    query_param: QueryParam,
+        query,
+        knowledge_graph_inst: BaseGraphStorage,
+        entities_vdb: BaseVectorStorage,
+        text_chunks_db: BaseKVStorage[TextChunkSchema],
+        query_param: QueryParam,
 ):
     # get similar entities
     results = await entities_vdb.query(query, top_k=query_param.top_k)
@@ -757,10 +761,10 @@ async def _get_node_data(
 
 
 async def _find_most_related_text_unit_from_entities(
-    node_datas: list[dict],
-    query_param: QueryParam,
-    text_chunks_db: BaseKVStorage[TextChunkSchema],
-    knowledge_graph_inst: BaseGraphStorage,
+        node_datas: list[dict],
+        query_param: QueryParam,
+        text_chunks_db: BaseKVStorage[TextChunkSchema],
+        knowledge_graph_inst: BaseGraphStorage,
 ):
     text_units = [
         split_string_by_multi_markers(dp["source_id"], [GRAPH_FIELD_SEP])
@@ -800,8 +804,8 @@ async def _find_most_related_text_unit_from_entities(
             if this_edges:
                 for e in this_edges:
                     if (
-                        e[1] in all_one_hop_text_units_lookup
-                        and c_id in all_one_hop_text_units_lookup[e[1]]
+                            e[1] in all_one_hop_text_units_lookup
+                            and c_id in all_one_hop_text_units_lookup[e[1]]
                     ):
                         all_text_units_lookup[c_id]["relation_counts"] += 1
 
@@ -831,9 +835,9 @@ async def _find_most_related_text_unit_from_entities(
 
 
 async def _find_most_related_edges_from_entities(
-    node_datas: list[dict],
-    query_param: QueryParam,
-    knowledge_graph_inst: BaseGraphStorage,
+        node_datas: list[dict],
+        query_param: QueryParam,
+        knowledge_graph_inst: BaseGraphStorage,
 ):
     all_related_edges = await asyncio.gather(
         *[knowledge_graph_inst.get_node_edges(dp["entity_name"]) for dp in node_datas]
@@ -871,11 +875,11 @@ async def _find_most_related_edges_from_entities(
 
 
 async def _get_edge_data(
-    keywords,
-    knowledge_graph_inst: BaseGraphStorage,
-    relationships_vdb: BaseVectorStorage,
-    text_chunks_db: BaseKVStorage[TextChunkSchema],
-    query_param: QueryParam,
+        keywords,
+        knowledge_graph_inst: BaseGraphStorage,
+        relationships_vdb: BaseVectorStorage,
+        text_chunks_db: BaseKVStorage[TextChunkSchema],
+        query_param: QueryParam,
 ):
     results = await relationships_vdb.query(keywords, top_k=query_param.top_k)
 
@@ -953,9 +957,9 @@ async def _get_edge_data(
 
 
 async def _find_most_related_entities_from_relationships(
-    edge_datas: list[dict],
-    query_param: QueryParam,
-    knowledge_graph_inst: BaseGraphStorage,
+        edge_datas: list[dict],
+        query_param: QueryParam,
+        knowledge_graph_inst: BaseGraphStorage,
 ):
     entity_names = []
     seen = set()
@@ -990,10 +994,10 @@ async def _find_most_related_entities_from_relationships(
 
 
 async def _find_related_text_unit_from_relationships(
-    edge_datas: list[dict],
-    query_param: QueryParam,
-    text_chunks_db: BaseKVStorage[TextChunkSchema],
-    knowledge_graph_inst: BaseGraphStorage,
+        edge_datas: list[dict],
+        query_param: QueryParam,
+        text_chunks_db: BaseKVStorage[TextChunkSchema],
+        knowledge_graph_inst: BaseGraphStorage,
 ):
     text_units = [
         split_string_by_multi_markers(dp["source_id"], [GRAPH_FIELD_SEP])
@@ -1058,13 +1062,21 @@ def combine_contexts(entities, relationships, sources):
     return combined_entities, combined_relationships, combined_sources
 
 
+_BM25_INDEX_CACHE = {}
+
+
+def _tokenize(text: str) -> list[str]:
+    return [t.lower().strip() for t in jieba.cut(text) if t.strip()]
+
+
 async def naive_query(
-    query,
-    chunks_vdb: BaseVectorStorage,
-    text_chunks_db: BaseKVStorage[TextChunkSchema],
-    query_param: QueryParam,
-    global_config: dict,
-    hashing_kv: BaseKVStorage = None,
+        query,
+        chunks_vdb: BaseVectorStorage,
+        text_chunks_db: BaseKVStorage[TextChunkSchema],
+        query_param: QueryParam,
+        global_config: dict,
+        hashing_kv: BaseKVStorage = None,
+        algorithm: str = "bm25",
 ):
     # Handle cache
     use_model_func = global_config["llm_model_func"]
@@ -1075,12 +1087,53 @@ async def naive_query(
     if cached_response is not None:
         return cached_response
 
-    results = await chunks_vdb.query(query, top_k=query_param.top_k)
-    if not len(results):
-        return PROMPTS["fail_response"]
+    if algorithm == "vector":
+        results = await chunks_vdb.query(query, top_k=query_param.top_k)
+        if not len(results):
+            return PROMPTS["fail_response"]
 
-    chunks_ids = [r["id"] for r in results]
-    chunks = await text_chunks_db.get_by_ids(chunks_ids)
+        chunks_ids = [r["id"] for r in results]
+        chunks = await text_chunks_db.get_by_ids(chunks_ids)
+
+    elif algorithm == "bm25":
+        all_ids = await text_chunks_db.all_keys()
+        docs = []
+        doc_ids = []
+        batch = 512
+        for i in range(0, len(all_ids), batch):
+            part = all_ids[i: i + batch]
+            rows = await text_chunks_db.get_by_ids(part, fields=None)
+            for did, row in zip(part, rows):
+                if row and row.get("content"):
+                    docs.append(row["content"])
+                    doc_ids.append(did)
+
+        if not docs:
+            return PROMPTS["fail_response"]
+
+        work_dir = global_config["working_dir"]
+        cache = _BM25_INDEX_CACHE.get(work_dir)
+        need_rebuild = (
+                cache is None
+                or len(cache.get("doc_ids", [])) != len(doc_ids)
+                or cache.get("doc_ids") != doc_ids
+        )
+        if need_rebuild:
+            corpus_tokens = [_tokenize(d) for d in docs]
+            bm25 = BM25Okapi(corpus_tokens)
+            _BM25_INDEX_CACHE[work_dir] = {"bm25": bm25, "doc_ids": doc_ids}
+        else:
+            bm25 = cache["bm25"]
+
+        q_tokens = _tokenize(query)
+        scores = bm25.get_scores(q_tokens)
+        if scores is None or len(scores) == 0:
+            return PROMPTS["fail_response"]
+        top2_idx = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:2]
+        top_ids = [doc_ids[i] for i in top2_idx]
+        chunks = await text_chunks_db.get_by_ids(top_ids, fields=None)
+    else:
+        raise ValueError(f"Unknown algorithm {algorithm}")
 
     # Filter out invalid chunks
     valid_chunks = [
@@ -1122,7 +1175,7 @@ async def naive_query(
 
     if len(response) > len(sys_prompt):
         response = (
-            response[len(sys_prompt) :]
+            response[len(sys_prompt):]
             .replace(sys_prompt, "")
             .replace("user", "")
             .replace("model", "")
